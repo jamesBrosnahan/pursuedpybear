@@ -1,13 +1,17 @@
 from collections import defaultdict
 from collections.abc import Collection
+from typing import Callable
 from typing import Hashable
 from typing import Iterable
 from typing import Iterator
+from typing import Sequence
+from typing import Tuple
 from typing import Type
-
-from pygame.sprite import LayeredDirty
+from typing import Union
 
 from ppb.abc import Scene
+from ppb.camera import Camera
+from ppb.events import EventMixin
 
 
 class GameObjectCollection(Collection):
@@ -24,7 +28,7 @@ class GameObjectCollection(Collection):
     def __iter__(self) -> Iterator[Hashable]:
         return (x for x in list(self.all))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.all)
 
     def add(self, game_object: Hashable, tags: Iterable[Hashable]=()) -> None:
@@ -40,6 +44,8 @@ class GameObjectCollection(Collection):
 
             container.add(MyObject(), tags=("red", "blue")
         """
+        if isinstance(tags, (str, bytes)):
+            raise TypeError("You passed a string instead of an iterable, this probably isn't what you intended.\n\nTry making it a tuple.")
         self.all.add(game_object)
         self.kinds[type(game_object)].add(game_object)
         for tag in tags:
@@ -66,8 +72,12 @@ class GameObjectCollection(Collection):
         """
         if kind is None and tag is None:
             raise TypeError("get() takes at least one keyword-only argument. 'kind' or 'tag'.")
-        kinds = self.kinds[kind] or self.all
-        tags = self.tags[tag] or self.all
+        kinds = self.all
+        tags = self.all
+        if kind is not None:
+            kinds = self.kinds[kind]
+        if tag is not None:
+            tags = self.tags[tag]
         return (x for x in kinds.intersection(tags))
 
     def remove(self, game_object: Hashable) -> None:
@@ -85,34 +95,37 @@ class GameObjectCollection(Collection):
             s.discard(game_object)
 
 
-class BaseScene(Scene):
+class BaseScene(Scene, EventMixin):
 
-    def __init__(self, engine, *, background_color=(0, 0, 100),
-                 container_class=GameObjectCollection, set_up=None, **kwargs):
+    def __init__(self, engine, *, background_color: Sequence[int]=(0, 0, 100),
+                 container_class: Type=GameObjectCollection,
+                 set_up: Callable=None, pixel_ratio: Union[int, float]=80,
+                 **kwargs):
         super().__init__(engine)
         self.background_color = background_color
         self.background = None
         self.game_objects = container_class()
-        self.render_group = LayeredDirty()
+        self.main_camera = Camera(pixel_ratio=pixel_ratio)
         if set_up is not None:
             set_up(self)
 
     def __contains__(self, item: Hashable) -> bool:
         return item in self.game_objects
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator:
         return (x for x in self.game_objects)
 
-    def render(self):
-        window = self.engine.display
-        self.render_group.add(s for s in self.game_objects)
-        return self.render_group.draw(window, self.background)
+    @property
+    def main_camera(self) -> Camera:
+        return next(self.game_objects.get(tag="main_camera"))
 
-    def simulate(self, time_delta: float):
-        for game_object in self.game_objects:
-            game_object.on_update(time_delta)
+    @main_camera.setter
+    def main_camera(self, value: Camera):
+        for camera in self.game_objects.get(tag="main_camera"):
+            self.game_objects.remove(camera)
+        self.game_objects.add(value, tags=["main_camera"])
 
-    def change(self):
+    def change(self) -> Tuple[bool, dict]:
         """
         Default case, override in subclass as necessary.
         """

@@ -5,6 +5,7 @@ from pytest import mark
 from pytest import raises
 
 from ppb.scenes import BaseScene
+from ppb.camera import Camera
 from ppb.scenes import GameObjectCollection
 
 
@@ -77,16 +78,30 @@ def test_get_methods(container, player, enemies):
     assert len(red_set) == 2
     assert player in red_set
     assert enemies[1] in red_set
+    assert enemies[0] not in red_set
+
+    null_set = set(container.get(tag="this doesn't exist"))
+    assert len(null_set) == 0
+    assert player not in null_set
+    assert enemies[0] not in null_set
+    assert enemies[1] not in null_set
 
     with raises(TypeError):
         container.get()
 
 
 @mark.parametrize("container", containers())
+def test_get_with_string_tags(container, player):
+    """Test that addings a string instead of an array-like throws."""
+    with raises(TypeError):
+        container.add(player, "player")
+
+
+@mark.parametrize("container", containers())
 def test_remove_methods(container, player, enemies):
-    container.add(player, "test")
-    container.add(enemies[0], "test")
-    container.add(enemies[1], "blue")
+    container.add(player, ["test"])
+    container.add(enemies[0], ["test"])
+    container.add(enemies[1], ["blue"])
     assert player in container
     assert enemies[0] in container
     assert enemies[1] in container
@@ -118,24 +133,14 @@ def test_collection_methods(container, player, enemies):
         assert game_object is player or game_object is enemies[0]
 
 
-def test_scene_render(scene):
-    """
-    This test ensure a call to render works.
+def test_main_camera(scene):
 
-    The two mocks allow the test to run without hardware, but makes sure
-    that the function runs to completion without errors.
-    """
-    scene.render_group = Mock()  # Render group is an implementation detail
-    scene.render()
+    assert isinstance(scene.main_camera, Camera)
+    old_cam = scene.main_camera
+    new_cam = Camera()
 
+    scene.main_camera = new_cam
 
-def test_scene_simulate(scene):
-    """
-    Ensure that all game_objects get called by simulate.
-    """
-    all_mocks = (Mock(), Mock(), Mock())
-    for mock in all_mocks:
-        scene.add(mock)
-    scene.simulate(0.016)
-    for mock in all_mocks:
-        mock.update.assert_called_once()
+    assert scene.main_camera == new_cam
+    assert old_cam not in scene
+    assert new_cam in scene
