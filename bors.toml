@@ -1,0 +1,12 @@
+status = [
+  "dockerfiles",
+  "docs",
+  "Linux Dockerfile:.ci/dockerfiles/python_3.6-slim",
+  "Linux Dockerfile:.ci/dockerfiles/python_3.7-slim",
+  "Windows Dockerfile:.ci/dockerfiles/python_3.6-windowsservercore-1809",
+  "Windows Dockerfile:.ci/dockerfiles/python_3.7-windowsservercore-1809",
+  "macOS PYTHON:3.6.8",
+  "macOS PYTHON:3.7.2",
+]
+
+delete_merged_branches = true

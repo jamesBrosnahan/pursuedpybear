@@ -1,16 +1,17 @@
 from collections import defaultdict
 from collections import deque
 from contextlib import ExitStack
-from itertools import chain
 import time
+from typing import Any
 from typing import Callable
 from typing import Type
 
+import ppb.events as events
 from ppb.abc import Engine
+from ppb.events import StartScene
 from ppb.events import EventMixin
 from ppb.events import Quit
 from ppb.systems import PygameEventPoller
-from ppb.systems import PygameMouseSystem
 from ppb.systems import Renderer
 from ppb.systems import Updater
 from ppb.utils import LoggingMixin
@@ -19,7 +20,7 @@ from ppb.utils import LoggingMixin
 class GameEngine(Engine, EventMixin, LoggingMixin):
 
     def __init__(self, first_scene: Type, *,
-                 systems=(Renderer, Updater, PygameEventPoller, PygameMouseSystem),
+                 systems=(Renderer, Updater, PygameEventPoller),
                  scene_kwargs=None, **kwargs):
 
         super(GameEngine, self).__init__()
@@ -35,6 +36,7 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
         self.event_extensions = defaultdict(dict)
         self.running = False
         self.entered = False
+        self._last_idle_time = None
 
         # Systems
         self.systems_classes = systems
@@ -79,17 +81,18 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
 
     def start(self):
         self.running = True
+        self._last_idle_time = time.monotonic()
         self.activate({"scene_class": self.first_scene,
                        "kwargs": self.scene_kwargs})
 
     def main_loop(self):
         while self.running:
             time.sleep(0)
-            for system in self.systems:
-                for event in system.activate(self):
-                    self.signal(event)
-                    while self.events:
-                        self.publish()
+            now = time.monotonic()
+            self.signal(events.Idle(now - self._last_idle_time))
+            self._last_idle_time = now
+            while self.events:
+                self.publish()
             self.manage_scene()
 
     def activate(self, next_scene: dict):
@@ -105,11 +108,19 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
 
     def publish(self):
         event = self.events.popleft()
-        event.scene = self.current_scene
+        scene = self.current_scene
+        event.scene = scene
         for attr_name, attr_value in self.event_extensions[type(event)].items():
             setattr(event, attr_name, attr_value)
-        for entity in chain((self,), self.systems, (self.current_scene,), self.current_scene):
-            entity.__event__(event, self.signal)
+        self.__event__(event, self.signal)
+        for system in self.systems:
+            system.__event__(event, self.signal)
+        # Required for if we publish with no current scene.
+        # Should only happen when the last scene stops via event.
+        if scene is not None:
+            scene.__event__(event, self.signal)
+            for game_object in scene:
+                game_object.__event__(event, self.signal)
 
     def manage_scene(self):
         if self.current_scene is None:
@@ -121,8 +132,60 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
         if next_scene:
             self.activate(next_scene)
 
-    def on_quit(self, quit_event: 'Quit', signal: Callable):  #TODO: Look up syntax for Callable typing.
+    def on_start_scene(self, event: StartScene, signal: Callable[[Any], None]):
+        """
+        Start a new scene. The current scene pauses.
+        """
+        self.pause_scene()
+        self.start_scene(event.new_scene, event.kwargs)
+
+    def on_stop_scene(self, event: events.StopScene, signal: Callable[[Any], None]):
+        """
+        Stop a running scene. If there's a scene on the stack, it resumes.
+        """
+        self.stop_scene()
+        if self.current_scene is not None:
+            signal(events.SceneContinued())
+        else:
+            signal(events.Quit())
+
+    def on_replace_scene(self, event: events.ReplaceScene, signal):
+        """
+        Replace the running scene with a new one.
+        """
+        self.stop_scene()
+        self.start_scene(event.new_scene, event.kwargs)
+
+    def on_quit(self, quit_event: Quit, signal: Callable[[Any], None]):
         self.running = False
+
+    def pause_scene(self):
+        # Empty the queue before changing scenes.
+        self.flush_events()
+        self.signal(events.ScenePaused())
+        self.publish()
+
+    def stop_scene(self):
+        # Empty the queue before changing scenes.
+        self.flush_events()
+        self.signal(events.SceneStopped())
+        self.publish()
+        self.scenes.pop()
+
+    def start_scene(self, scene, kwargs):
+        if kwargs:
+            scene = scene(self, **kwargs)
+        self.scenes.append(scene)
+        self.signal(events.SceneStarted())
 
     def register(self, event_type, attribute, value):
         self.event_extensions[event_type][attribute] = value
+
+    def flush_events(self):
+        """
+        Flush the event queue.
+
+        Call before doing anything that will cause signals to be delivered to
+        the wrong scene.
+        """
+        self.events = deque()

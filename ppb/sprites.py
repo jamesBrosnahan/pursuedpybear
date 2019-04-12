@@ -3,6 +3,7 @@ from numbers import Number
 from os.path import realpath
 from pathlib import Path
 from typing import Dict, Iterable, AnyStr, Sequence
+from typing import Union
 
 from ppb import Vector
 from ppb.events import EventMixin
@@ -30,7 +31,7 @@ class Side:
         self.parent = parent
 
     def __repr__(self):
-        return "Side({}, {})".format(self.parent, self.side)
+        return f"Side({self.parent!r}, {self.side!r})"
 
     def __str__(self):
         return str(self.value)
@@ -139,19 +140,69 @@ class Side:
             raise AttributeError(message)
 
 
-class BaseSprite(EventMixin):
+class Rotatable:
+    """
+    A simple rotation mixin. Can be included with sprites.
+    """
+    _rotation = 0
+    # This is necessary to make facing do the thing while also being adjustable.
+    basis = Vector(0, -1)
+    # Considered making basis private, the only reason to do so is to
+    # discourage people from relying on it as data.
 
+    @property
+    def facing(self):
+        return Vector(*self.basis).rotate(self.rotation).normalize()
+
+    @property
+    def rotation(self):
+        return self._rotation
+
+    @rotation.setter
+    def rotation(self, value):
+        self._rotation = value % 360
+
+    def rotate(self, degrees):
+        """Rotate the sprite by a given angle (in degrees)."""
+        self.rotation += degrees
+
+
+class BaseSprite(EventMixin, Rotatable):
+    """
+    The base Sprite class. All sprites should inherit from this (directly or
+    indirectly).
+
+    Attributes:
+    * image (str): The image file
+    * resource_path (pathlib.Path): The path that image is relative to
+    * position: Location of the sprite
+    * facing: The direction of the "top" of the sprite (rendering only)
+    * size: The width/height of the sprite (sprites are square)
+    """
     image = None
     resource_path = None
+    position: Vector = Vector(0, 0)
+    size: Union[int, float] = 1
 
-    def __init__(self, size: int=1, pos: Iterable=(0, 0), blackboard: Dict=None, facing: Vector=Vector(0, -1)):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.position = Vector(*pos)
-        self._offset_value = None
-        self._game_unit_size = None
-        self.game_unit_size = size
-        self.facing = facing
-        self.blackboard = blackboard or {}
+
+        # Make these instance properties with fresh instances
+        # Don't use Vector.convert() because we need copying
+        self.position = Vector(*self.position)
+
+        # Initialize things
+        for k, v in kwargs.items():
+            # Abbreviations
+            if k == 'pos':
+                k = 'position'
+            # Castings
+            if k == 'position':
+                v = Vector(*v)  # Vector.convert() when that ships.
+            setattr(self, k, v)
+
+        # Trigger some calculations
+        self.size = self.size
 
     @property
     def center(self) -> Vector:
@@ -197,16 +248,8 @@ class BaseSprite(EventMixin):
         self.position.y = value - self._offset_value
 
     @property
-    def game_unit_size(self):
-        return self._game_unit_size
-
-    @game_unit_size.setter
-    def game_unit_size(self, value):
-        self._game_unit_size = value
-        self._offset_value = self._game_unit_size / 2
-
-    def rotate(self, degrees: Number):
-        self.facing.rotate(degrees)
+    def _offset_value(self):
+        return self.size / 2
 
     def __image__(self):
         if self.image is None:

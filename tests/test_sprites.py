@@ -1,6 +1,7 @@
 from unittest import TestCase
 
 from ppb import BaseSprite, Vector
+from ppb.sprites import Rotatable
 
 
 class TestBaseSprite(TestCase):
@@ -273,3 +274,63 @@ class TestBaseSprite(TestCase):
     def test_bottom_bottom(self):
         self.assertRaises(AttributeError, getattr, self.sprite.bottom, "bottom")
         self.assertRaises(AttributeError, setattr, self.sprite.bottom, "bottom", Vector(1, 1))
+
+
+def test_class_attrs():
+    class TestSprite(BaseSprite):
+        position = Vector(4, 2)
+
+    sprite = TestSprite()
+    assert sprite.position == Vector(4, 2)
+
+    sprite = TestSprite(position=(2, 4))
+    assert sprite.position == Vector(2, 4)
+
+
+def test_offset():
+    class TestSprite(BaseSprite):
+        size = 1.1
+
+    assert TestSprite().left < -0.5
+
+
+def test_rotatable_instatiation():
+    rotatable = Rotatable()
+    assert rotatable.rotation == 0
+
+
+def test_rotatable_subclass():
+
+    class TestRotatable(Rotatable):
+        _rotation = 180
+        basis = Vector(0, 1)
+
+    rotatable = TestRotatable()
+    assert rotatable.rotation == 180
+    assert rotatable.facing == Vector(0, -1)
+
+
+def test_rotatable_rotation_setter():
+    rotatable = Rotatable()
+
+    rotatable.rotation = 405
+    assert rotatable.rotation == 45
+
+
+def test_rotatable_rotate():
+    rotatable = Rotatable()
+
+    assert rotatable.rotation == 0
+    rotatable.rotate(180)
+    assert rotatable.rotation == 180
+    rotatable.rotate(200)
+    assert rotatable.rotation == 20
+    rotatable.rotate(-300)
+    assert rotatable.rotation == 80
+
+
+def test_rotatable_base_sprite():
+    test_sprite = BaseSprite()
+
+    test_sprite.rotate(1)
+    assert test_sprite.rotation == 1

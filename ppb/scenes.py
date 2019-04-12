@@ -1,5 +1,6 @@
 from collections import defaultdict
 from collections.abc import Collection
+from numbers import Number
 from typing import Callable
 from typing import Hashable
 from typing import Iterable
@@ -7,7 +8,7 @@ from typing import Iterator
 from typing import Sequence
 from typing import Tuple
 from typing import Type
-from typing import Union
+from warnings import warn
 
 from ppb.abc import Scene
 from ppb.camera import Camera
@@ -96,16 +97,20 @@ class GameObjectCollection(Collection):
 
 
 class BaseScene(Scene, EventMixin):
+    # Background color, in RGB, each channel is 0-255
+    background_color: Sequence[int] = (0, 0, 100)
+    container_class: Type = GameObjectCollection
 
-    def __init__(self, engine, *, background_color: Sequence[int]=(0, 0, 100),
-                 container_class: Type=GameObjectCollection,
-                 set_up: Callable=None, pixel_ratio: Union[int, float]=80,
+    def __init__(self, engine, *,                 
+                 set_up: Callable=None, pixel_ratio: Number=64,
                  **kwargs):
         super().__init__(engine)
-        self.background_color = background_color
-        self.background = None
-        self.game_objects = container_class()
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+        self.game_objects = self.container_class()
         self.main_camera = Camera(pixel_ratio=pixel_ratio)
+
         if set_up is not None:
             set_up(self)
 
@@ -129,7 +134,13 @@ class BaseScene(Scene, EventMixin):
         """
         Default case, override in subclass as necessary.
         """
-        return self.running, {"scene_class": self.next}
+        next = self.next
+        self.next = None
+        if self.next or not self.running:
+            message = "The Scene.change interface is deprecated. Use the events commands instead."
+            warn(message, DeprecationWarning)
+
+        return self.running, {"scene_class": next}
 
     def add(self, game_object: Hashable, tags: Iterable=())-> None:
         """
