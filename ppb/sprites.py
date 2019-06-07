@@ -1,12 +1,12 @@
 from inspect import getfile
-from numbers import Number
-from os.path import realpath
 from pathlib import Path
-from typing import Dict, Iterable, AnyStr, Sequence
 from typing import Union
 
 from ppb import Vector
 from ppb.events import EventMixin
+from ppb.utils import FauxFloat
+
+import ppb_vector
 
 
 TOP = "top"
@@ -18,15 +18,15 @@ error_message = "'{klass}' object does not have attribute '{attribute}'"
 side_attribute_error_message = error_message.format
 
 
-class Side:
+class Side(FauxFloat):
     sides = {
         LEFT: ('x', -1),
         RIGHT: ('x', 1),
-        TOP: ('y', -1),
-        BOTTOM: ('y', 1)
+        TOP: ('y', 1),
+        BOTTOM: ('y', -1)
     }
 
-    def __init__(self, parent: 'BaseSprite',side: AnyStr):
+    def __init__(self, parent: 'BaseSprite', side: str):
         self.side = side
         self.parent = parent
 
@@ -34,103 +34,109 @@ class Side:
         return f"Side({self.parent!r}, {self.side!r})"
 
     def __str__(self):
-        return str(self.value)
+        return str(float(self))
 
-    def __add__(self, other):
-        return self.value + other
+    def _lookup_side(self, side):
+        dimension, sign = self.sides[side]
+        return dimension, sign * self.parent._offset_value
 
-    def __radd__(self, other):
-        return other + self.value
-
-    def __sub__(self, other):
-        return self.value - other
-
-    def __rsub__(self, other):
-        return other - self.value
-
-    def __eq__(self, other):
-        return self.value == other
-
-    def __le__(self, other):
-        return self.value <= other
-
-    def __ge__(self, other):
-        return self.value >= other
-
-    def __ne__(self, other):
-        return self.value != other
-
-    def __gt__(self, other):
-        return self.value > other
-
-    def __lt__(self, other):
-        return self.value < other
-
-    @property
-    def value(self):
-        coordinate, multiplier = self.sides[self.side]
-        offset = self.parent._offset_value
-        return self.parent.position[coordinate] + (offset * multiplier)
+    def __float__(self):
+        dimension, offset = self._lookup_side(self.side)
+        return self.parent.position[dimension] + offset
 
     @property
     def top(self):
         self._attribute_gate(TOP, [TOP, BOTTOM])
-        return Vector(self.value, self.parent.top.value)
+        return Vector(float(self), float(self.parent.top))
 
     @top.setter
     def top(self, value):
         self._attribute_gate(TOP, [TOP, BOTTOM])
-        setattr(self.parent, self.side, value[0])
-        self.parent.top = value[1]
+        self.parent.position = self._mk_update_vector_side(TOP, value)
 
     @property
     def bottom(self):
         self._attribute_gate(BOTTOM, [TOP, BOTTOM])
-        return Vector(self.value, self.parent.bottom.value)
+        return Vector(float(self), float(self.parent.bottom))
 
     @bottom.setter
     def bottom(self, value):
         self._attribute_gate(BOTTOM, [TOP, BOTTOM])
-        setattr(self.parent, self.side, value[0])
-        self.parent.bottom = value[1]
+        self.parent.position = self._mk_update_vector_side(BOTTOM, value)
 
     @property
     def left(self):
         self._attribute_gate(LEFT, [LEFT, RIGHT])
-        return Vector(self.parent.left.value, self.value)
+        return Vector(float(self.parent.left), float(self))
 
     @left.setter
     def left(self, value):
         self._attribute_gate(LEFT, [LEFT, RIGHT])
-        setattr(self.parent, self.side, value[1])
-        self.parent.left = value[0]
+        self.parent.position = self._mk_update_vector_side(LEFT, value)
 
     @property
     def right(self):
         self._attribute_gate(RIGHT, [LEFT, RIGHT])
-        return Vector(self.parent.right.value, self.value)
+        return Vector(float(self.parent.right), float(self))
 
     @right.setter
     def right(self, value):
         self._attribute_gate(RIGHT, [LEFT, RIGHT])
-        setattr(self.parent, self.side, value[1])
-        self.parent.right = value[0]
+        self.parent.position = self._mk_update_vector_side(RIGHT, value)
 
     @property
     def center(self):
         if self.side in (TOP, BOTTOM):
-            return Vector(self.parent.center.x, self.value)
+            return Vector(self.parent.center.x, float(self))
         else:
-            return Vector(self.value, self.parent.center.y)
+            return Vector(float(self), self.parent.center.y)
 
     @center.setter
     def center(self, value):
-        if self.side in (TOP, BOTTOM):
-            setattr(self.parent, self.side, value[1])
-            self.parent.center.x = value[0]
-        else:
-            setattr(self.parent, self.side, value[0])
-            self.parent.position.y = value[1]
+        self.parent.position = self._mk_update_vector_center(value)
+
+    def _mk_update_vector_side(self, attribute, value: Vector):
+        """
+        Calculate the updated vector, based on the given corner.
+
+        That is, handles the calculation for forms like sprite.top.left = vector
+        """
+        value = Vector(value)
+        assert attribute != 'center'
+        # Does a bunch of dynamc resolution:
+        # Sprite.top.left
+        #        ^   ^ attribute
+        #        self.side
+        self_dimension, self_offset = self._lookup_side(self.side)
+
+        attr_dimension, attr_offset = self._lookup_side(attribute)
+
+        assert self_dimension != attr_dimension
+
+        fields = {
+            self_dimension: value[self_dimension] - self_offset,
+            attr_dimension: value[attr_dimension] - attr_offset,
+        }
+        return Vector(fields)
+
+    def _mk_update_vector_center(self, value):
+        """
+        Calculate the update vector, based on the given side.
+
+        That is, handles the calculation for forms like sprite.right = number
+        """
+        value = Vector(value)
+        # Pretty similar to ._mk_update_vector_side()
+        self_dimension, self_offset = self._lookup_side(self.side)
+
+        attr_dimension = 'y' if self_dimension == 'x' else 'x'
+
+        fields = {
+            self_dimension: value[self_dimension] - self_offset,
+            attr_dimension: value[attr_dimension]
+        }
+
+        return Vector(fields)
 
     def _attribute_gate(self, attribute, bad_sides):
         if self.side in bad_sides:
@@ -153,6 +159,10 @@ class Rotatable:
     @property
     def facing(self):
         return Vector(*self.basis).rotate(self.rotation).normalize()
+
+    @facing.setter
+    def facing(self, value):
+        self.rotation = self.basis.angle(value)
 
     @property
     def rotation(self):
@@ -187,9 +197,7 @@ class BaseSprite(EventMixin, Rotatable):
     def __init__(self, **kwargs):
         super().__init__()
 
-        # Make these instance properties with fresh instances
-        # Don't use Vector.convert() because we need copying
-        self.position = Vector(*self.position)
+        self.position = Vector(self.position)
 
         # Initialize things
         for k, v in kwargs.items():
@@ -198,7 +206,7 @@ class BaseSprite(EventMixin, Rotatable):
                 k = 'position'
             # Castings
             if k == 'position':
-                v = Vector(*v)  # Vector.convert() when that ships.
+                v = Vector(v)
             setattr(self, k, v)
 
         # Trigger some calculations
@@ -209,11 +217,8 @@ class BaseSprite(EventMixin, Rotatable):
         return self.position
 
     @center.setter
-    def center(self, value: Sequence[float]):
-        x = value[0]
-        y = value[1]
-        self.position.x = x
-        self.position.y = y
+    def center(self, value: ppb_vector.VectorLike):
+        self.position = Vector(value)
 
     @property
     def left(self) -> Side:
@@ -221,7 +226,7 @@ class BaseSprite(EventMixin, Rotatable):
 
     @left.setter
     def left(self, value: float):
-        self.position.x = value + self._offset_value
+        self.position = Vector(value + self._offset_value, self.position.y)
 
     @property
     def right(self) -> Side:
@@ -229,7 +234,7 @@ class BaseSprite(EventMixin, Rotatable):
 
     @right.setter
     def right(self, value):
-        self.position.x = value - self._offset_value
+        self.position = Vector(value - self._offset_value, self.position.y)
 
     @property
     def top(self):
@@ -237,7 +242,7 @@ class BaseSprite(EventMixin, Rotatable):
 
     @top.setter
     def top(self, value):
-        self.position.y = value + self._offset_value
+        self.position = Vector(self.position.x, value - self._offset_value)
 
     @property
     def bottom(self):
@@ -245,7 +250,7 @@ class BaseSprite(EventMixin, Rotatable):
 
     @bottom.setter
     def bottom(self, value):
-        self.position.y = value - self._offset_value
+        self.position = Vector(self.position.x, value + self._offset_value)
 
     @property
     def _offset_value(self):
@@ -258,5 +263,9 @@ class BaseSprite(EventMixin, Rotatable):
 
     def __resource_path__(self):
         if self.resource_path is None:
-            self.resource_path = Path(realpath(getfile(type(self)))).absolute().parent
+            try:
+                file_path = Path(getfile(type(self))).resolve().parent
+            except TypeError:
+                file_path = Path.cwd().resolve()
+            self.resource_path = file_path
         return self.resource_path

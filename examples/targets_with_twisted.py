@@ -2,6 +2,13 @@ import logging
 import ppb
 from ppb import Vector
 from ppb import keycodes
+from twisted.internet import defer
+from twisted.internet import task
+from twisted.internet import endpoints
+from twisted.web.server import Site
+import klein
+from dataclasses import dataclass
+from typing import Any
 
 
 class MoverMixin(ppb.BaseSprite):
@@ -16,7 +23,6 @@ class Player(MoverMixin, ppb.BaseSprite):
     # and adding it on press and subtracting it on release.
     left_vector = Vector(-1, 0)
     right_vector = Vector(1, 0)
-    _rotation = 180
 
     def on_key_pressed(self, event, signal):
         if event.key in (keycodes.A, keycodes.Left):
@@ -43,9 +49,26 @@ class Player(MoverMixin, ppb.BaseSprite):
         )
 
 
+@dataclass(eq=False)
+class TargetCounter(object):
+
+    engine: Any
+
+    app = klein.Klein()
+
+    @app.route('/')
+    def count(self, request):
+        return str(len(list(self.engine.current_scene.get(tag='target'))))
+
+    @classmethod
+    def web_server(cls, reactor, engine, description):
+        ep = endpoints.serverFromString(reactor, description)
+        counter = cls(engine)
+        return ep.listen(Site(counter.app.resource()))
+
+
 class Bullet(MoverMixin, ppb.BaseSprite):
     velocity = Vector(0, 2)
-    _rotation = 180
 
     def on_update(self, update, signal):
         super().on_update(update, signal)  # Execute movement
@@ -79,8 +102,36 @@ class GameScene(ppb.BaseScene):
             self.add(Target(pos=Vector(x, 1.875)), tags=['target'])
 
 
+######### This is "non-game-specific code" ###########
+class _FinishLoop(Exception):
+    pass
+
+
+@defer.inlineCallbacks
+def twisted_engine_loop(engine):
+    def loop_once(engine):
+        if not engine.running:
+            raise _FinishLoop(engine)
+        engine.loop_once()
+    loop = task.LoopingCall(loop_once, engine)
+    engine.start()
+    try:
+        yield loop.start(0.001)
+    except _FinishLoop:
+        pass
+######### End of "non-game-specific code" ###########
+
+
+@defer.inlineCallbacks
+def main(reactor):
+    with ppb.make_engine(starting_scene=GameScene) as engine:
+        TargetCounter.web_server(
+            reactor=reactor,
+            engine=engine,
+            description="tcp:8080"
+        )
+        yield twisted_engine_loop(engine)
+
 if __name__ == "__main__":
-    ppb.run(
-        starting_scene=GameScene,
-        log_level=logging.DEBUG,
-    )
+    import sys
+    task.react(main, sys.argv[1:])

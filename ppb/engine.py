@@ -1,13 +1,16 @@
 from collections import defaultdict
 from collections import deque
 from contextlib import ExitStack
+from itertools import chain
 import time
 from typing import Any
 from typing import Callable
+from typing import DefaultDict
+from typing import List
 from typing import Type
+from typing import Union
 
 import ppb.events as events
-from ppb.abc import Engine
 from ppb.events import StartScene
 from ppb.events import EventMixin
 from ppb.events import Quit
@@ -17,7 +20,10 @@ from ppb.systems import Updater
 from ppb.utils import LoggingMixin
 
 
-class GameEngine(Engine, EventMixin, LoggingMixin):
+_ellipsis = type(...)
+
+
+class GameEngine(EventMixin, LoggingMixin):
 
     def __init__(self, first_scene: Type, *,
                  systems=(Renderer, Updater, PygameEventPoller),
@@ -33,7 +39,7 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
         # Engine State
         self.scenes = []
         self.events = deque()
-        self.event_extensions = defaultdict(dict)
+        self.event_extensions: DefaultDict[Union[Type, _ellipsis], List[Callable[[Any], None]]] = defaultdict(list)
         self.running = False
         self.entered = False
         self._last_idle_time = None
@@ -88,12 +94,17 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
     def main_loop(self):
         while self.running:
             time.sleep(0)
-            now = time.monotonic()
-            self.signal(events.Idle(now - self._last_idle_time))
-            self._last_idle_time = now
-            while self.events:
-                self.publish()
-            self.manage_scene()
+            self.loop_once()
+
+    def loop_once(self):
+        if not self.entered:
+            raise ValueError("Cannot run before things have started",
+                             self.entered)
+        now = time.monotonic()
+        self.signal(events.Idle(now - self._last_idle_time))
+        self._last_idle_time = now
+        while self.events:
+            self.publish()
 
     def activate(self, next_scene: dict):
         scene = next_scene["scene_class"]
@@ -101,7 +112,7 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
             return
         args = next_scene.get("args", [])
         kwargs = next_scene.get("kwargs", {})
-        self.scenes.append(scene(self, *args, **kwargs))
+        self.scenes.append(scene(*args, **kwargs))
 
     def signal(self, event):
         self.events.append(event)
@@ -110,8 +121,9 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
         event = self.events.popleft()
         scene = self.current_scene
         event.scene = scene
-        for attr_name, attr_value in self.event_extensions[type(event)].items():
-            setattr(event, attr_name, attr_value)
+        extensions = chain(self.event_extensions[type(event)], self.event_extensions[...])
+        for callback in extensions:
+            callback(event)
         self.__event__(event, self.signal)
         for system in self.systems:
             system.__event__(event, self.signal)
@@ -121,16 +133,6 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
             scene.__event__(event, self.signal)
             for game_object in scene:
                 game_object.__event__(event, self.signal)
-
-    def manage_scene(self):
-        if self.current_scene is None:
-            self.running = False
-            return None
-        scene_running, next_scene = self.current_scene.change()
-        if not scene_running:
-            self.scenes.pop()
-        if next_scene:
-            self.activate(next_scene)
 
     def on_start_scene(self, event: StartScene, signal: Callable[[Any], None]):
         """
@@ -173,13 +175,29 @@ class GameEngine(Engine, EventMixin, LoggingMixin):
         self.scenes.pop()
 
     def start_scene(self, scene, kwargs):
-        if kwargs:
-            scene = scene(self, **kwargs)
+        if isinstance(scene, type):
+            scene = scene(**(kwargs or {}))
         self.scenes.append(scene)
         self.signal(events.SceneStarted())
 
-    def register(self, event_type, attribute, value):
-        self.event_extensions[event_type][attribute] = value
+    def register(self, event_type: Union[Type, _ellipsis], callback: Callable[[], Any]):
+        """
+        Register a callback to be applied to an event at time of publishing.
+
+        Primarily to be used by subsystems.
+
+        The callback will receive the event. Your code should modify the event
+        in place. It does not need to return it.
+
+        :param event_type: The class of an event.
+        :param callback: A callable, must accept an event, and return no value.
+        :return: None
+        """
+        if not isinstance(event_type, type) and event_type is not ...:
+            raise TypeError(f"{type(self)}.register requires event_type to be a type.")
+        if not callable(callback):
+            raise TypeError(f"{type(self)}.register requires callback to be callable.")
+        self.event_extensions[event_type].append(callback)
 
     def flush_events(self):
         """

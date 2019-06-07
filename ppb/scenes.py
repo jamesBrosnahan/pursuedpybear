@@ -6,11 +6,8 @@ from typing import Hashable
 from typing import Iterable
 from typing import Iterator
 from typing import Sequence
-from typing import Tuple
 from typing import Type
-from warnings import warn
 
-from ppb.abc import Scene
 from ppb.camera import Camera
 from ppb.events import EventMixin
 
@@ -32,7 +29,7 @@ class GameObjectCollection(Collection):
     def __len__(self) -> int:
         return len(self.all)
 
-    def add(self, game_object: Hashable, tags: Iterable[Hashable]=()) -> None:
+    def add(self, game_object: Hashable, tags: Iterable[Hashable] = ()) -> None:
         """
         Add a game_object to the container.
 
@@ -48,11 +45,13 @@ class GameObjectCollection(Collection):
         if isinstance(tags, (str, bytes)):
             raise TypeError("You passed a string instead of an iterable, this probably isn't what you intended.\n\nTry making it a tuple.")
         self.all.add(game_object)
-        self.kinds[type(game_object)].add(game_object)
+
+        for kind in type(game_object).mro():
+            self.kinds[kind].add(game_object)
         for tag in tags:
             self.tags[tag].add(game_object)
 
-    def get(self, *, kind: Type=None, tag: Hashable=None, **_) -> Iterator:
+    def get(self, *, kind: Type = None, tag: Hashable = None, **_) -> Iterator:
         """
         Get an iterator of objects by kind or tag.
 
@@ -91,20 +90,21 @@ class GameObjectCollection(Collection):
             container.remove(myObject)
         """
         self.all.remove(game_object)
-        self.kinds[type(game_object)].remove(game_object)
+        for kind in type(game_object).mro():
+            self.kinds[kind].remove(game_object)
         for s in self.tags.values():
             s.discard(game_object)
 
 
-class BaseScene(Scene, EventMixin):
+class BaseScene(EventMixin):
     # Background color, in RGB, each channel is 0-255
     background_color: Sequence[int] = (0, 0, 100)
     container_class: Type = GameObjectCollection
 
-    def __init__(self, engine, *,                 
-                 set_up: Callable=None, pixel_ratio: Number=64,
+    def __init__(self, *,
+                 set_up: Callable = None, pixel_ratio: Number = 64,
                  **kwargs):
-        super().__init__(engine)
+        super().__init__()
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -121,6 +121,14 @@ class BaseScene(Scene, EventMixin):
         return (x for x in self.game_objects)
 
     @property
+    def kinds(self):
+        return self.game_objects.kinds
+
+    @property
+    def tags(self):
+        return self.game_objects.tags
+
+    @property
     def main_camera(self) -> Camera:
         return next(self.game_objects.get(tag="main_camera"))
 
@@ -129,18 +137,6 @@ class BaseScene(Scene, EventMixin):
         for camera in self.game_objects.get(tag="main_camera"):
             self.game_objects.remove(camera)
         self.game_objects.add(value, tags=["main_camera"])
-
-    def change(self) -> Tuple[bool, dict]:
-        """
-        Default case, override in subclass as necessary.
-        """
-        next = self.next
-        self.next = None
-        if self.next or not self.running:
-            message = "The Scene.change interface is deprecated. Use the events commands instead."
-            warn(message, DeprecationWarning)
-
-        return self.running, {"scene_class": next}
 
     def add(self, game_object: Hashable, tags: Iterable=())-> None:
         """
